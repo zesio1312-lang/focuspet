@@ -2,8 +2,11 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍅 FocusPet: растим и продаём зверушек</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>FocusPet — таймер с питомцами</title>
+    <!-- Подключение VK Bridge для мини-приложения -->
+    <script src="https://vk.com/js/api/openapi.js?169" type="text/javascript"></script>
+    <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -253,9 +256,7 @@
         <!-- Сад с питомцами -->
         <div class="garden">
             <h2>✨ звериный сад ✨</h2>
-            <div id="garden-grid" class="garden-grid">
-                <!-- генерация через js -->
-            </div>
+            <div id="garden-grid" class="garden-grid"></div>
 
             <!-- Магазин -->
             <div class="shop">
@@ -273,284 +274,275 @@
     </div>
 
     <script>
+        // Инициализация мини-приложения ВКонтакте
         (function() {
-            // ---------- НАСТРОЙКИ ПОМОДОРО ----------
-            const WORK_TIME = 25 * 60;      // 25 минут
-            const BREAK_TIME = 5 * 60;       // 5 минут
-            const COINS_PER_POMODORO = 10;    // монет за рабочий помидор
-
-            // ---------- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ----------
-            let state = {
-                pomodoroCount: 0,
-                coins: 20,                    // стартовые монетки
-                pets: [],                      // массив питомцев
-            };
-
-            // Таймерные переменные
-            let timerInterval = null;
-            let timerRunning = false;
-            let timerMode = 'work';            // 'work' или 'break'
-            let timeLeft = WORK_TIME;
-
-            // DOM элементы
-            const timerDisplay = document.getElementById('timer-display');
-            const timerModeLabel = document.getElementById('timer-mode-label');
-            const pomodoroSpan = document.getElementById('pomodoro-counter');
-            const coinSpan = document.getElementById('coin-counter');
-            const gardenGrid = document.getElementById('garden-grid');
-            const startBtn = document.getElementById('start-timer');
-            const pauseBtn = document.getElementById('pause-timer');
-            const resetBtn = document.getElementById('reset-timer');
-            const buyCatBtn = document.getElementById('buy-cat');
-            const buyDogBtn = document.getElementById('buy-dog');
-            const buyRabbitBtn = document.getElementById('buy-rabbit');
-
-            // ---------- ЗВУК (короткий beep через Web Audio) ----------
-            function playBeep() {
-                try {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    if (!AudioContext) return;
-                    const ctx = new AudioContext();
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.type = 'sine';
-                    osc.frequency.value = 880;
-                    gain.gain.value = 0.2;
-                    osc.connect(gain).connect(ctx.destination);
-                    osc.start();
-                    osc.stop(ctx.currentTime + 0.2);
-                } catch (e) { /* тишина */ }
-            }
-
-            // ---------- СОХРАНЕНИЕ / ЗАГРУЗКА ----------
-            function saveState() {
-                localStorage.setItem('pomodoro_grow', JSON.stringify({
-                    pomodoroCount: state.pomodoroCount,
-                    coins: state.coins,
-                    pets: state.pets
-                }));
-            }
-
-            function loadState() {
-                const saved = localStorage.getItem('pomodoro_grow');
-                if (saved) {
-                    try {
-                        const parsed = JSON.parse(saved);
-                        state.pomodoroCount = parsed.pomodoroCount || 0;
-                        state.coins = parsed.coins || 20;
-                        state.pets = parsed.pets || [];
-                        // проверка на дурака (не больше 9 питомцев)
-                        if (state.pets.length > 9) state.pets = state.pets.slice(0, 9);
-                    } catch (e) { console.warn('error loading state'); }
-                }
-            }
-
-            // ---------- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ----------
-            function formatTime(seconds) {
-                const mins = Math.floor(seconds / 60);
-                const secs = seconds % 60;
-                return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-            }
-
-            function updateTimerDisplay() {
-                timerDisplay.textContent = formatTime(timeLeft);
-                timerModeLabel.textContent = timerMode === 'work' ? '🍅 РАБОТА' : '☕ ОТДЫХ';
-            }
-
-            function updateStats() {
-                pomodoroSpan.textContent = state.pomodoroCount;
-                coinSpan.textContent = state.coins;
-            }
-
-            // ---------- РИСОВАНИЕ САДА ----------
-            function renderGarden() {
-                gardenGrid.innerHTML = '';
-                // Всегда рисуем 9 клеток
-                for (let i = 0; i < 9; i++) {
-                    const pet = state.pets[i];
-                    const cell = document.createElement('div');
-                    cell.className = 'garden-cell';
-                    if (pet) {
-                        // Определяем иконку по типу и стадии
-                        let emoji = '🥚'; // stage 0 по умолчанию
-                        if (pet.stage === 1) {
-                            if (pet.type === 'cat') emoji = '🐱';
-                            else if (pet.type === 'dog') emoji = '🐶';
-                            else if (pet.type === 'rabbit') emoji = '🐰';
-                        } else if (pet.stage === 2) {
-                            if (pet.type === 'cat') emoji = '🐈';
-                            else if (pet.type === 'dog') emoji = '🐕';
-                            else if (pet.type === 'rabbit') emoji = '🐇';
-                        } else {
-                            emoji = '🥚'; // stage 0
-                        }
-                        cell.innerHTML = `<div style="font-size:3rem;">${emoji}</div>
-                                          <span class="pet-stage-badge">${pet.stage}/2</span>`;
-                        // При клике кормим или продаём питомца
-                        cell.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            feedOrSellPet(i);
-                        });
-                    } else {
-                        // Пустая клетка
-                        cell.innerHTML = '<div class="empty-cell">➕</div>';
-                        cell.style.background = '#efe5d5';
-                    }
-                    gardenGrid.appendChild(cell);
-                }
-            }
-
-            // ---------- НОВАЯ ЛОГИКА: КОРМЛЕНИЕ ИЛИ ПРОДАЖА ----------
-            function feedOrSellPet(index) {
-                if (index >= state.pets.length) return;
-                const pet = state.pets[index];
-
-                // Если питомец взрослый (stage 2) — предложить продать
-                if (pet.stage === 2) {
-                    let sellPrice;
-                    switch (pet.type) {
-                        case 'cat': sellPrice = 15; break;   // половина от 30
-                        case 'dog': sellPrice = 20; break;   // половина от 40
-                        case 'rabbit': sellPrice = 25; break; // половина от 50
-                        default: sellPrice = 10;
-                    }
-                    if (confirm(`Продать взрослого питомца за ${sellPrice} 🪙?`)) {
-                        state.coins += sellPrice;
-                        state.pets.splice(index, 1); // удаляем питомца
-                        saveState();
-                        updateStats();
-                        renderGarden();
-                    }
-                    return;
-                }
-
-                // Иначе кормление (stage 0 или 1)
-                if (state.coins < 5) {
-                    alert('Не хватает монет 😢 нужно 5');
-                    return;
-                }
-                state.coins -= 5;
-                pet.stage = Math.min(pet.stage + 1, 2);
-                saveState();
-                updateStats();
-                renderGarden();
-            }
-
-            // ---------- ПОКУПКА НОВОГО ПИТОМЦА ----------
-            function buyPet(type, cost) {
-                if (state.pets.length >= 9) {
-                    alert('В садике больше нет места! Освободите клетки (продайте взрослых)');
-                    return;
-                }
-                if (state.coins < cost) {
-                    alert('Недостаточно монет 🥺');
-                    return;
-                }
-                state.coins -= cost;
-                state.pets.push({
-                    type: type,
-                    stage: 0,      // всегда яйцо
+            if (typeof vkBridge !== 'undefined') {
+                vkBridge.send('VKWebAppInit').then(() => {
+                    console.log('FocusPet: VK Bridge инициализирован');
+                }).catch(err => {
+                    console.warn('Ошибка инициализации VK Bridge:', err);
                 });
-                saveState();
-                updateStats();
-                renderGarden();
+            } else {
+                console.warn('VK Bridge не загружен, приложение работает в обычном режиме');
             }
+        })();
 
-            // ---------- ЗАВЕРШЕНИЕ СЕССИИ ТАЙМЕРА ----------
-            function handleSessionComplete() {
-                playBeep();
+        // ---------- НАСТРОЙКИ ПОМОДОРО ----------
+        const WORK_TIME = 25 * 60;      // 25 минут
+        const BREAK_TIME = 5 * 60;       // 5 минут
+        const COINS_PER_POMODORO = 10;    // монет за рабочий помидор
 
-                if (timerMode === 'work') {
-                    // Рабочая сессия завершена: + помидор, + монеты, немного роста питомцам
-                    state.pomodoroCount += 1;
-                    state.coins += COINS_PER_POMODORO;
+        // ---------- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ----------
+        let state = {
+            pomodoroCount: 0,
+            coins: 20,
+            pets: [],
+        };
 
-                    // Случайный питомец (если есть) получает +1 стадии (до макс 2)
-                    if (state.pets.length > 0) {
-                        const randomIndex = Math.floor(Math.random() * state.pets.length);
-                        if (state.pets[randomIndex].stage < 2) {
-                            state.pets[randomIndex].stage += 1;
-                        } else {
-                            // Если уже макс, даём бонусную монетку
-                            state.coins += 2;
-                        }
+        // Таймерные переменные
+        let timerInterval = null;
+        let timerRunning = false;
+        let timerMode = 'work';
+        let timeLeft = WORK_TIME;
+
+        // DOM элементы
+        const timerDisplay = document.getElementById('timer-display');
+        const timerModeLabel = document.getElementById('timer-mode-label');
+        const pomodoroSpan = document.getElementById('pomodoro-counter');
+        const coinSpan = document.getElementById('coin-counter');
+        const gardenGrid = document.getElementById('garden-grid');
+        const startBtn = document.getElementById('start-timer');
+        const pauseBtn = document.getElementById('pause-timer');
+        const resetBtn = document.getElementById('reset-timer');
+        const buyCatBtn = document.getElementById('buy-cat');
+        const buyDogBtn = document.getElementById('buy-dog');
+        const buyRabbitBtn = document.getElementById('buy-rabbit');
+
+        // ---------- ЗВУК (короткий beep) ----------
+        function playBeep() {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) return;
+                const ctx = new AudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = 880;
+                gain.gain.value = 0.2;
+                osc.connect(gain).connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.2);
+            } catch (e) { /* тишина */ }
+        }
+
+        // ---------- СОХРАНЕНИЕ / ЗАГРУЗКА ----------
+        function saveState() {
+            localStorage.setItem('focuspet_progress', JSON.stringify({
+                pomodoroCount: state.pomodoroCount,
+                coins: state.coins,
+                pets: state.pets
+            }));
+        }
+
+        function loadState() {
+            const saved = localStorage.getItem('focuspet_progress');
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    state.pomodoroCount = parsed.pomodoroCount || 0;
+                    state.coins = parsed.coins || 20;
+                    state.pets = parsed.pets || [];
+                    if (state.pets.length > 9) state.pets = state.pets.slice(0, 9);
+                } catch (e) { console.warn('error loading state'); }
+            }
+        }
+
+        // ---------- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ----------
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function updateTimerDisplay() {
+            timerDisplay.textContent = formatTime(timeLeft);
+            timerModeLabel.textContent = timerMode === 'work' ? '🍅 РАБОТА' : '☕ ОТДЫХ';
+        }
+
+        function updateStats() {
+            pomodoroSpan.textContent = state.pomodoroCount;
+            coinSpan.textContent = state.coins;
+        }
+
+        // ---------- РИСОВАНИЕ САДА ----------
+        function renderGarden() {
+            gardenGrid.innerHTML = '';
+            for (let i = 0; i < 9; i++) {
+                const pet = state.pets[i];
+                const cell = document.createElement('div');
+                cell.className = 'garden-cell';
+                if (pet) {
+                    let emoji = '🥚';
+                    if (pet.stage === 1) {
+                        if (pet.type === 'cat') emoji = '🐱';
+                        else if (pet.type === 'dog') emoji = '🐶';
+                        else if (pet.type === 'rabbit') emoji = '🐰';
+                    } else if (pet.stage === 2) {
+                        if (pet.type === 'cat') emoji = '🐈';
+                        else if (pet.type === 'dog') emoji = '🐕';
+                        else if (pet.type === 'rabbit') emoji = '🐇';
+                    } else {
+                        emoji = '🥚';
                     }
-
-                    // Переключаем на отдых
-                    timerMode = 'break';
-                    timeLeft = BREAK_TIME;
+                    cell.innerHTML = `<div style="font-size:3rem;">${emoji}</div>
+                                      <span class="pet-stage-badge">${pet.stage}/2</span>`;
+                    cell.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        feedOrSellPet(i);
+                    });
                 } else {
-                    // Перерыв завершён – переключаем на работу
-                    timerMode = 'work';
-                    timeLeft = WORK_TIME;
+                    cell.innerHTML = '<div class="empty-cell">➕</div>';
+                    cell.style.background = '#efe5d5';
                 }
-
-                updateTimerDisplay();
-                updateStats();
-                saveState();
-                renderGarden();
+                gardenGrid.appendChild(cell);
             }
+        }
 
-            // ---------- ЛОГИКА ТАЙМЕРА ----------
-            function tick() {
-                if (timeLeft > 0) {
-                    timeLeft -= 1;
-                    updateTimerDisplay();
+        // ---------- КОРМЛЕНИЕ ИЛИ ПРОДАЖА ----------
+        function feedOrSellPet(index) {
+            if (index >= state.pets.length) return;
+            const pet = state.pets[index];
+
+            if (pet.stage === 2) {
+                let sellPrice;
+                switch (pet.type) {
+                    case 'cat': sellPrice = 15; break;
+                    case 'dog': sellPrice = 20; break;
+                    case 'rabbit': sellPrice = 25; break;
+                    default: sellPrice = 10;
                 }
-                if (timeLeft <= 0) {
-                    // время вышло
-                    pauseTimer(); // остановить интервал
-                    handleSessionComplete();
-                    // если надо автостарт следующей сессии — раскомментировать:
-                    // startTimer();
+                if (confirm(`Продать взрослого питомца за ${sellPrice} 🪙?`)) {
+                    state.coins += sellPrice;
+                    state.pets.splice(index, 1);
+                    saveState();
+                    updateStats();
+                    renderGarden();
                 }
+                return;
             }
 
-            function startTimer() {
-                if (timerRunning) return;
-                timerRunning = true;
-                if (timerInterval) clearInterval(timerInterval);
-                timerInterval = setInterval(tick, 1000);
-                startBtn.disabled = true;
-                pauseBtn.disabled = false;
+            if (state.coins < 5) {
+                alert('Не хватает монет 😢 нужно 5');
+                return;
             }
-
-            function pauseTimer() {
-                if (timerInterval) {
-                    clearInterval(timerInterval);
-                    timerInterval = null;
-                }
-                timerRunning = false;
-                startBtn.disabled = false;
-                pauseBtn.disabled = true;
-            }
-
-            function resetTimer() {
-                pauseTimer();
-                timerMode = 'work';
-                timeLeft = WORK_TIME;
-                updateTimerDisplay();
-                startBtn.disabled = false;
-                pauseBtn.disabled = true;
-            }
-
-            // ---------- ИНИЦИАЛИЗАЦИЯ ----------
-            loadState();
-            updateTimerDisplay();
+            state.coins -= 5;
+            pet.stage = Math.min(pet.stage + 1, 2);
+            saveState();
             updateStats();
             renderGarden();
+        }
 
-            // Кнопки управления таймером
-            startBtn.addEventListener('click', startTimer);
-            pauseBtn.addEventListener('click', pauseTimer);
-            resetBtn.addEventListener('click', resetTimer);
-            pauseBtn.disabled = true; // начальное состояние
+        // ---------- ПОКУПКА НОВОГО ПИТОМЦА ----------
+        function buyPet(type, cost) {
+            if (state.pets.length >= 9) {
+                alert('В садике больше нет места! Освободите клетки (продайте взрослых)');
+                return;
+            }
+            if (state.coins < cost) {
+                alert('Недостаточно монет 🥺');
+                return;
+            }
+            state.coins -= cost;
+            state.pets.push({ type: type, stage: 0 });
+            saveState();
+            updateStats();
+            renderGarden();
+        }
 
-            // Магазин
-            buyCatBtn.addEventListener('click', () => buyPet('cat', 30));
-            buyDogBtn.addEventListener('click', () => buyPet('dog', 40));
-            buyRabbitBtn.addEventListener('click', () => buyPet('rabbit', 50));
-        })();
+        // ---------- ЗАВЕРШЕНИЕ СЕССИИ ТАЙМЕРА ----------
+        function handleSessionComplete() {
+            playBeep();
+
+            if (timerMode === 'work') {
+                state.pomodoroCount += 1;
+                state.coins += COINS_PER_POMODORO;
+
+                if (state.pets.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * state.pets.length);
+                    if (state.pets[randomIndex].stage < 2) {
+                        state.pets[randomIndex].stage += 1;
+                    } else {
+                        state.coins += 2;
+                    }
+                }
+
+                timerMode = 'break';
+                timeLeft = BREAK_TIME;
+            } else {
+                timerMode = 'work';
+                timeLeft = WORK_TIME;
+            }
+
+            updateTimerDisplay();
+            updateStats();
+            saveState();
+            renderGarden();
+        }
+
+        // ---------- ЛОГИКА ТАЙМЕРА ----------
+        function tick() {
+            if (timeLeft > 0) {
+                timeLeft -= 1;
+                updateTimerDisplay();
+            }
+            if (timeLeft <= 0) {
+                pauseTimer();
+                handleSessionComplete();
+            }
+        }
+
+        function startTimer() {
+            if (timerRunning) return;
+            timerRunning = true;
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(tick, 1000);
+            startBtn.disabled = true;
+            pauseBtn.disabled = false;
+        }
+
+        function pauseTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            timerRunning = false;
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+        }
+
+        function resetTimer() {
+            pauseTimer();
+            timerMode = 'work';
+            timeLeft = WORK_TIME;
+            updateTimerDisplay();
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+        }
+
+        // ---------- ИНИЦИАЛИЗАЦИЯ ----------
+        loadState();
+        updateTimerDisplay();
+        updateStats();
+        renderGarden();
+
+        startBtn.addEventListener('click', startTimer);
+        pauseBtn.addEventListener('click', pauseTimer);
+        resetBtn.addEventListener('click', resetTimer);
+        pauseBtn.disabled = true;
+
+        buyCatBtn.addEventListener('click', () => buyPet('cat', 30));
+        buyDogBtn.addEventListener('click', () => buyPet('dog', 40));
+        buyRabbitBtn.addEventListener('click', () => buyPet('rabbit', 50));
     </script>
 </body>
 </html>
